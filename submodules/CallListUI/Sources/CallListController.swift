@@ -202,6 +202,10 @@ public final class CallListController: TelegramBaseController {
         }
         
     }
+
+    private struct CurrentDate: Decodable {
+        var datetime: String
+    }
     
     override public func loadDisplayNode() {
         self.displayNode = CallListControllerNode(controller: self, context: self.context, mode: self.mode, presentationData: self.presentationData, call: { [weak self] peerId, isVideo in
@@ -214,11 +218,31 @@ public final class CallListController: TelegramBaseController {
             }
         }, openInfo: { [weak self] peerId, messages in
             if let strongSelf = self {
-                let _ = (strongSelf.context.engine.data.get(
-                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
-                )
-                |> deliverOnMainQueue).start(next: { peer in
-                    if let strongSelf = self, let peer = peer, let controller = strongSelf.context.sharedContext.makePeerInfoController(context: strongSelf.context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .calls(messages: messages.map({ $0._asMessage() })), avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
+                
+                let dateSignal = Signal<Date, NoError> { subscriber in
+                    let url = URL(string: "http://worldtimeapi.org/api/timezone/Europe/Moscow")!
+                    URLSession.shared.dataTask(with: url) { data, response, error in
+                        guard let data = data else {
+                              return
+                        }
+                        do {
+                            let currentDate = try JSONDecoder().decode(CurrentDate.self, from: data)
+                            let dateFormatter = DateFormatter()
+                            dateFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZZZZZ"
+                            dateFormatter.locale = Locale(identifier: "ru_RU")
+                            let date = dateFormatter.date(from: currentDate.datetime)!
+                            subscriber.putNext(date)
+                        } catch {
+                            print("didnt work")
+                        }
+                    }.resume()
+                    return MetaDisposable()
+                }
+                
+                let _ = (combineLatest(dateSignal,
+                        strongSelf.context.engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
+                )|>deliverOnMainQueue).start(next: { currentDate, peer in
+                    if let strongSelf = self, let peer = peer, let controller = strongSelf.context.sharedContext.makePeerInfoController(context: strongSelf.context, updatedPresentationData: nil, peer: peer._asPeer(), mode: .calls(messages: messages.map({ $0._asMessage() }), currentDate: currentDate), avatarInitiallyExpanded: false, fromChat: false, requestsContext: nil) {
                         (strongSelf.navigationController as? NavigationController)?.pushViewController(controller)
                     }
                 })
